@@ -203,7 +203,7 @@ void led_indicator(void *pvParameter)
 
 void wifi_reconnect_task(void *pvParameters);
 void advanced_ota_example_task(void *pvParameters);
-//void led_indicator(void *pvParameters);
+void led_indicator(void *pvParameters);
 
 
 void app_main(void)
