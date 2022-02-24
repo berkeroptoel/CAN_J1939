@@ -8,6 +8,7 @@
 */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -20,10 +21,12 @@
 #include "esp_err.h"
 #include "esp_spiffs.h"
 #include "esp_wifi.h"
+#include "esp_sntp.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include "driver/gpio.h"
 #include "protocol_examples_common.h"
 #include "common.h"
@@ -36,7 +39,10 @@ static const char *TAG = "MAIN";
 int s_retry_num = 0; //why static? --removed
 EventGroupHandle_t s_wifi_event_group; //why static? --removed
 
-
+//RTC
+char strftime_buf[64];
+time_t now;
+struct tm timeinfo;
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -200,10 +206,66 @@ void led_indicator(void *pvParameter)
 
 }
 
+void print_current_time(void *pvParameter)
+{
+	while(1)
+	{
+
+	    localtime_r(&now, &timeinfo);
+	    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+	    ESP_LOGI(TAG, "The current date/time in New Ankara is: %s", strftime_buf);
+
+		vTaskDelay( 10000 / portTICK_PERIOD_MS );
+
+	}
+
+	// Never reach here
+	vTaskDelete(NULL);
+
+}
+
+
+void time_sync_notification_cb(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "Notification of a time synchronization event");
+}
+
+static void initialize_sntp(void)
+{
+    ESP_LOGI(TAG, "Initializing SNTP");
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    sntp_init();
+}
+
+
+static void obtain_time(void)
+{
+
+    initialize_sntp();
+
+    // wait for time to be set
+    time_t now = 0;
+    struct tm timeinfo = { 0 };
+    int retry = 0;
+    const int retry_count = 10;
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+}
+
+
+
 
 void wifi_reconnect_task(void *pvParameters);
 void advanced_ota_example_task(void *pvParameters);
-//void led_indicator(void *pvParameters);
+void led_indicator(void *pvParameters);
+//void print_current_time(void *pvParameters);
 
 
 void app_main(void)
@@ -236,6 +298,22 @@ void app_main(void)
 		while(1) vTaskDelay(10);
 	}
 
+	// RTC
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    // Is time set? If not, tm_year will be (1970 - 1900).
+    if (timeinfo.tm_year < (2016 - 1900)) {
+        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+        obtain_time();
+        // update 'now' variable with current time
+        time(&now);
+    }
+
+    // Set timezone to Eastern Standard Time and print local time
+    setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
+    tzset();
+
+
 
 
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE)
@@ -261,5 +339,7 @@ void app_main(void)
     xTaskCreate(&advanced_ota_example_task, "advanced_ota_example_task", 1024 * 10, NULL, 5, NULL);
     xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 1024*10, NULL, 2, NULL);
     xTaskCreate(led_indicator, "led indicator", 1024, NULL, 1, NULL);
+    //xTaskCreate(print_current_time, "date time", 1024, NULL, 1, NULL);
+
 
 }
